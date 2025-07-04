@@ -10,9 +10,6 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.prompt import Prompt
 from rich.markdown import Markdown
-from textual.app import App, ComposeResult
-from textual.widgets import Input, Static
-from typing import Any
 
 from prompts import index_prompt, planning_prompt, tools_prompt
 from tools import edit_file, read_file
@@ -57,7 +54,7 @@ def create_index(project_path: str) -> None:
             content = read_file(file_path)
 
         response = client.responses.create(
-            model="gpt-4.1",
+            model="gpt-4o",
             instructions="You are a coding agent",
             input=index_prompt(files, file_path, content),
         )
@@ -211,34 +208,27 @@ def loop(messages: list[ChatCompletionMessageParam]) -> list[ChatCompletionMessa
 
     return messages
 
-class PolluxApp(App[Any]):
-    CSS = '''
-    Screen {
-        align: center middle;
-    }
-    '''
-
-    def compose(self) -> ComposeResult:
-        yield Static("Enter your name")
-        yield Input(placeholder="Your name")
-
-    def on_input_submitted(self, event: Input.Submitted):
-        self.exit(f"You typed this dawg: {event.value}")
-
-
 if __name__ == "__main__":
-    task = Prompt.ask("prompt")
+    # task = Prompt.ask("prompt")
+    #
+    # plan_response = plan(task)
+    #
+    # messages: list[ChatCompletionMessageParam] = [
+    #     {"role": "user", "content": task},
+    #     {"role": "assistant", "content": plan_response}
+    # ]
 
-    plan_response = plan(task)
+    task = Prompt.ask("prompt")
 
     messages: list[ChatCompletionMessageParam] = [
         {"role": "user", "content": task},
-        {"role": "assistant", "content": plan_response}
     ]
 
     while True:
+        messages = loop(messages)
+        user_msg = Prompt.ask("prompt")
         messages.append(
             {"role": "user", "content": user_msg}
         )
-        messages = loop(messages)
-        user_msg = Prompt.ask("prompt")
+
+

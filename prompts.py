@@ -146,7 +146,8 @@ brief analysis of current state and next action needed
 5. **Progressive Completion**: Each action should move the task forward. If an action fails, analyze why and adjust.
 6. **Completion Detection**: Stop issuing commands ONLY when you can confirm the entire task is successfully completed. when you are about to stop always **think**, what is the task? did I complete it? if not keep going
 7. **Full Path**: Always use full path while running commands or ~.
-8. **File Tool Best Practices**:
+8. **Command behaviour**: You **MUST** not run commands that require input, always ask yourself this comman will require input. Always use versions of commands that do not require typed input.
+9. **File Tool Best Practices**:
    - Always use read_file before edit_file to see current content
    - Ensure old_text matches exactly (including whitespace/indentation)
    - Use terminal commands for file system operations (create, move, delete)
