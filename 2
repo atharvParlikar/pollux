@@ -1,12 +1,15 @@
+# pyright: reportUnusedCallResult=false
+
+import asyncio
 import subprocess
-import threading
 import json
-import time
-from typing import Any, IO
-from lsp_types import Position
+import threading
+from typing import IO, Any
+from .lsp_types import Position
 
 class LSPClient:
-    def __init__(self, server_command: list[str], project_uri: str) -> None:
+    def __init__(self, server_command: list[str], project_uri: str, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop: asyncio.AbstractEventLoop = loop
         self.proc: subprocess.Popen[bytes] = subprocess.Popen(
             server_command,
             stdin=subprocess.PIPE,
@@ -14,13 +17,16 @@ class LSPClient:
             stderr=subprocess.PIPE,
             bufsize=0
         )
-        self._start_reader()
         self.project_uri: str = project_uri
-        self.request_id: int = 1
+        self.request_id: int = 0
+        self._inflight: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._start_reader()
 
-    def get_next_id(self) -> int:
-        self.request_id += 1
-        return self.request_id
+
+    async def _resolve_future(self, response_id: int, result: dict[str, Any]):
+        fut = self._inflight.pop(response_id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(result)
 
     def _start_reader(self) -> None:
         def read_stream(stream: IO[bytes], label: str) -> None:
@@ -45,7 +51,19 @@ class LSPClient:
                     if content_length > 0:
                         body = stream.read(content_length)
                         decoded = body.decode()
-                        print(f"[{label}]>>", json.dumps(json.loads(decoded), indent=2))
+                        lsp_response: dict[str, Any] = json.loads(decoded)
+
+                        response_id = lsp_response.get("id")
+
+                        if response_id is not None and response_id in self._inflight:
+                            asyncio.run_coroutine_threadsafe(
+                                self._resolve_future(response_id, lsp_response),
+                                self.loop
+                            )
+                        else:
+                            print('[NOTIFICATION]\n', json.dumps(lsp_response, indent=2))
+
+
                 except Exception as e:
                     print(f"[{label}] Error:", e)
 
@@ -59,17 +77,44 @@ class LSPClient:
                 target=read_stream, args=(self.proc.stderr, "ERR"), daemon=True
             ).start()
 
-    def send(self, payload: dict[str, Any]) -> None:
-        content = json.dumps(payload)
+    def get_next_id(self) -> int:
+        self.request_id += 1
+        return self.request_id
+
+    async def send(self, payload: dict[str, Any]) -> dict[str, Any]:
+        req_id = self.get_next_id()
+        fut: asyncio.Future[dict[str, Any]] = asyncio.Future()
+        self._inflight[req_id] = fut
+
+        request = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            **payload
+        }
+
+        content = json.dumps(request)
         message = f"Content-Length: {len(content)}\r\n\r\n{content}"
         if self.proc.stdin is not None:
             self.proc.stdin.write(message.encode())
             self.proc.stdin.flush()
 
-    def initialize(self) -> None:
-        init_payload = {
+        return await fut
+
+
+    def send_without_await(self, payload: dict[str, Any]) -> None:
+        request = {
             "jsonrpc": "2.0",
-            "id": self.get_next_id(),
+            **payload
+        }
+
+        content = json.dumps(request)
+        message = f"Content-Length: {len(content)}\r\n\r\n{content}"
+        if self.proc.stdin is not None:
+            self.proc.stdin.write(message.encode())
+            self.proc.stdin.flush()
+
+    async def initialize(self) -> dict[str, Any]:
+        init_payload = {
             "method": "initialize",
             "params": {
                 "processId": None,
@@ -117,11 +162,11 @@ class LSPClient:
             }
         }
 
-        self.send(init_payload)
+        return await self.send(init_payload)
 
-    def did_open(self, file_uri: str, content: str, language_id: str = "typescript") -> None:
+    async def did_open(self, file_uri: str, content: str, language_id: str = "typescript") -> dict[str, Any]:
         """Notify the server that a document has been opened"""
-        self.send({
+        return await self.send({
             "jsonrpc": "2.0",
             "method": "textDocument/didOpen",
             "params": {
@@ -134,8 +179,8 @@ class LSPClient:
             }
         })
 
-    def goto_definition(self, document_uri: str, position: Position):
-        self.send({
+    async def goto_definition(self, document_uri: str, position: Position) -> dict[str, Any]:
+        return await self.send({
             "jsonrpc": "2.0",
             "id": self.get_next_id(),
             "method": "textDocument/definition",
@@ -150,10 +195,8 @@ class LSPClient:
             }
         })
 
-    def hover(self, file_uri: str, position: Position):
-        self.send({
-            "jsonrpc": "2.0",
-            "id": self.get_next_id(),
+    async def hover(self, file_uri: str, position: Position) -> dict[str, Any]:
+        return await self.send({
             "method": "textDocument/hover",
             "params": {
                 "textDocument": {
@@ -166,21 +209,19 @@ class LSPClient:
             },
         })
 
-def main() -> None:
-    client = LSPClient(["pyright-langserver", "--stdio"], "file:///Users/atharvparlikar/test/")
+async def main() -> None:
+    loop = asyncio.get_event_loop()
+    client = LSPClient(["pyright-langserver", "--stdio"], "file:///Users/atharvparlikar/test/", loop)
 
-    client.initialize()
-    time.sleep(0.5)
+    initialized = await client.initialize()
+    print("[Initialized]\n", json.dumps(initialized, indent=2))
 
-    client.send({
-        "jsonrpc": "2.0",
+    client.send_without_await({
         "method": "initialized",
         "params": {}
     })
-    time.sleep(0.5)
 
-    client.send({
-        "jsonrpc": "2.0",
+    print("[workspaceFolder]", json.dumps(await client.send({
         "method": "workspace/didChangeWorkspaceFolders",
         "params": {
             "event": {
@@ -191,20 +232,15 @@ def main() -> None:
                 "removed": []
             }
         }
-    })
-    time.sleep(0.5)
+    }), indent=2))
 
     file_text = ''
     with open('/Users/atharvparlikar/test/foo.py') as f:
         file_text = f.read()
-    print(file_text)
 
-    client.did_open("file:///Users/atharvparlikar/test/foo.py", file_text, "python")
-    time.sleep(1)
+    print("[didOpen]\n", json.dumps(await client.did_open("file:///Users/atharvparlikar/test/foo.py", file_text, "python"), indent=2))
 
-    client.send({
-        "jsonrpc": "2.0",
-        "id": client.get_next_id(),
+    hover_res = await client.send({
         "method": "textDocument/hover",
         "params": {
             "textDocument": {
@@ -216,7 +252,10 @@ def main() -> None:
             }
         }
     })
-    time.sleep(2)
+
+    print("[Hover res]\n", json.dumps(hover_res, indent=2))
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
+
