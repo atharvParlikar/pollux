@@ -207,10 +207,24 @@ class LSPClient:
             }
         })
 
+    async def did_change(self, file_uri: str, new_text: str, version: int = 2) -> None:
+        await self.send_notification({
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": {
+                    "uri": file_uri,
+                    "version": version
+                },
+                "contentChanges": [
+                    {
+                        "text": new_text
+                    }
+                ]
+            }
+        })
+
     async def goto_definition(self, document_uri: str, position: Position) -> dict[str, Any]:
         return await self.send({
-            "jsonrpc": "2.0",
-            "id": self.get_next_id(),
             "method": "textDocument/definition",
             "params": {
                 "textDocument": {
@@ -237,13 +251,52 @@ class LSPClient:
             },
         })
 
+
+    async def get_completions(self, file_uri: str, position: Position) -> dict[str, Any]:
+        return await self.send({
+            "method": "textDocument/completion",
+            "params": {
+                "textDocument": {"uri": file_uri},
+                "position": {
+                    "line": position["line"],
+                    "character": position["character"]
+                }
+            }
+        })
+
+
+    async def get_references(self, file_uri: str, position: Position) -> dict[str, Any]:
+        return await self.send({
+            "method": "textDocument/references",
+            "params": {
+                "textDocument": {"uri": file_uri},
+                "position": position,
+                "context": {
+                    "includeDeclaration": True
+                }
+            }
+        })
+
+
+    async def get_document_symbols(self, file_uri: str) -> dict[str, Any]:
+        return await self.send({
+            "method": "textDocument/documentSymbol",
+            "params": {
+                "textDocument": {"uri": file_uri}
+            }
+        })
+
+    async def shutdown(self):
+        await self.send({"method": "shutdown", "params": {}})
+        await self.send_notification({"method": "exit", "params": {}})
+
 async def main() -> None:
     loop = asyncio.get_event_loop()
     client = LSPClient(["pyright-langserver", "--stdio"], "file:///Users/atharvparlikar/test/", loop)
 
     _ = await client.initialize()
 
-    hover_res = await client.hover(file_uri='file:///Users/atharvparlikar/test/foo.py', position={ "line": 2, "character": 4 })
+    hover_res = await client.goto_definition('file:///Users/atharvparlikar/test/foo.py', position={ "line": 2, "character": 4 })
 
     print("[Hover res]\n", json.dumps(hover_res["result"], indent=2))
 
