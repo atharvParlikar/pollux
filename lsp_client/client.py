@@ -61,9 +61,6 @@ class LSPClient:
                                 self._resolve_future(response_id, lsp_response),
                                 self.loop
                             )
-                        else:
-                            print('[NOTIFICATION]\n', json.dumps(lsp_response, indent=2))
-
 
                 except Exception as e:
                     print(f"[{label}] Error:", e)
@@ -172,7 +169,28 @@ class LSPClient:
             }
         }
 
-        return await self.send(init_payload)
+        init_res = await self.send(init_payload)
+
+        await self.send_notification({
+            "method": "initialized",
+            "params": {}
+        })
+
+        await self.send_notification({
+            "method": "workspace/didChangeWorkspaceFolders",
+            "params": {
+                "event": {
+                    "added": [{
+                        "uri": self.project_uri,
+                        "name": self.project_uri.split("/")[-1]
+                    }],
+                    "removed": []
+                }
+            }
+        })
+
+        return init_res
+
 
     async def did_open(self, file_uri: str, content: str, language_id: str = "typescript") -> None:
         """Notify the server that a document has been opened"""
@@ -223,50 +241,11 @@ async def main() -> None:
     loop = asyncio.get_event_loop()
     client = LSPClient(["pyright-langserver", "--stdio"], "file:///Users/atharvparlikar/test/", loop)
 
-    initialized = await client.initialize()
-    print("[Initialized]\n", json.dumps(initialized, indent=2))
+    _ = await client.initialize()
 
-    await client.send_notification({
-        "method": "initialized",
-        "params": {}
-    })
+    hover_res = await client.hover(file_uri='file:///Users/atharvparlikar/test/foo.py', position={ "line": 2, "character": 4 })
 
-    await client.send_notification({
-        "method": "workspace/didChangeWorkspaceFolders",
-        "params": {
-            "event": {
-                "added": [{
-                    "uri": client.project_uri,
-                    "name": client.project_uri.split("/")[-1]
-                }],
-                "removed": []
-            }
-        }
-    })
-    print("[worpspace] DONE")
-
-    file_text = ''
-    with open('/Users/atharvparlikar/test/foo.py') as f:
-        file_text = f.read()
-
-    await client.did_open("file:///Users/atharvparlikar/test/foo.py", file_text, "python")
-    print("[didOpen] DONE")
-
-    hover_res = await client.send({
-        "method": "textDocument/hover",
-        "params": {
-            "textDocument": {
-                "uri": "file:///Users/atharvparlikar/test/foo.py"
-            },
-            "position": {
-                "line": 2,
-                "character": 4
-            }
-        }
-    })
-
-    print("[Hover res]\n", json.dumps(hover_res, indent=2))
-
+    print("[Hover res]\n", json.dumps(hover_res["result"], indent=2))
 
 if __name__ == "__main__":
     asyncio.run(main())
