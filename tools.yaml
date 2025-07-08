@@ -1,0 +1,101 @@
+create_plan:
+  desc: Create a new plan of action for achieving the goal
+  params:
+    title: (required) Brief title for the plan
+    steps: (required) List of actionable steps to complete
+
+update_plan:
+  desc: Update the existing plan based on new context or changed requirements
+  params:
+    changes: (required) Description of what changes are being made and why
+    updated_steps: (optional) Updated list of steps (replaces existing steps)
+
+gather_context:
+  desc: Gather information about the codebase, environment, or requirements
+  params:
+    target: (required) What to gather context about (e.g., 'codebase structure', 'dependencies', 'specific file')
+    scope: (optional, default=shallow) Scope of context gathering - shallow/deep/specific
+
+analyze_context:
+  desc: Analyze gathered context to extract insights and make informed decisions
+  params:
+    context_data: (required) The context data to analyze
+    analysis_type: (required) Type of analysis needed - structure/dependencies/issues/opportunities
+
+edit_files:
+  desc: Create, modify, or delete files in the codebase
+  params:
+    file_path: (required) Path to the file to edit
+    action: (required) Action to perform - create/modify/delete/append
+    content: (optional) Content to write or modify (for create/modify/append actions)
+    line_range: (optional) Line range for modifications (e.g., '10-20' or 'insert_at:15')
+
+run_terminal:
+  desc: Execute terminal commands for building, testing, or system operations
+  params:
+    command: (required) The terminal command to execute
+    working_directory: (optional) Directory to run the command in
+    timeout: (optional, default=30) Command timeout in seconds
+
+run_tests:
+  desc: Execute tests and analyze results
+  params:
+    test_type: (optional, default=all) Type of tests to run - unit/integration/e2e/all
+    test_path: (optional) Specific test file or directory to run
+    generate_report: (optional, default=false) Whether to generate a detailed test report
+
+search_codebase:
+  desc: Search for patterns, functions, or text within the codebase
+  params:
+    query: (required) Search query (text, regex, or pattern)
+    search_type: (optional, default=text) Type of search - text/regex/function/class/import
+    file_types: (optional) File extensions to search in (e.g., ['.js', '.py', '.json'])
+
+install_dependencies:
+  desc: Install or manage project dependencies
+  params:
+    package_manager: (required) Package manager to use - npm/pip/yarn/etc
+    packages: (optional) List of packages to install
+    dev_dependencies: (optional, default=false) Whether these are development dependencies
+
+git_operations:
+  desc: Perform git operations for version control
+  params:
+    operation: (required) Git operation - init/add/commit/push/pull/status/branch/checkout
+    message: (optional) Commit message (for commit operations)
+    files: (optional) Specific files to operate on
+
+validate_code:
+  desc: Validate code quality, syntax, and style
+  params:
+    validation_type: (required) Type of validation - syntax/style/quality/security
+    file_path: (optional) Specific file to validate (validates all if not specified)
+    fix_issues: (optional, default=false) Whether to automatically fix issues where possible
+
+debug_issue:
+  desc: Debug and analyze errors or issues in the code
+  params:
+    error_message: (required) Error message or description of the issue
+    context_files: (optional) Files related to the issue
+    debug_level: (optional, default=detailed) Level of debugging detail - basic/detailed/comprehensive
+
+ask_human:
+  desc: Ask the human for clarification, input, or decision when stuck or uncertain
+  params:
+    question: (required) The question to ask the human
+    context: (optional) Additional context about why this question is being asked
+    options: (optional) Multiple choice options if applicable
+
+goal_reached:
+  desc: Indicate that the goal has been successfully achieved
+  params:
+    summary: (required) Summary of what was accomplished
+    deliverables: (optional) List of files, features, or outputs created
+    next_steps: (optional) Suggested next steps or improvements
+
+document_progress:
+  desc: Document current progress and key decisions for future reference
+  params:
+    milestone: (required) Current milestone or progress point
+    decisions_made: (optional) Key decisions made during this phase
+    blockers: (optional) Current blockers or challenges

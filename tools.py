@@ -2,7 +2,6 @@
 
 from rich.console import Console
 from pathlib import Path
-from typing import Optional
 
 console = Console()
 

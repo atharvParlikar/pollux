@@ -1,57 +1,115 @@
 # pyright: reportUnusedCallResult=false
 
 import os
+import subprocess
+from typing import Any
 from dotenv import load_dotenv
+import json
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
+from openai.types.shared.chat_model import ChatModel
 from rich.console import Console
 from rich.prompt import Prompt
-from rich.markdown import Markdown
 
-from prompts import tools_prompt
-from tool_handlers import extract_thinking, handle_edit_file, handle_read_file, handle_terminal_command
+from prompts import decision_router_prompt_template, insert_context_prompt
 
 load_dotenv()
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 console = Console()
 
+MODEL: ChatModel = "gpt-4.1"
 
-def loop(messages: list[ChatCompletionMessageParam]) -> list[ChatCompletionMessageParam]:
-    system_prompt: ChatCompletionMessageParam = {"role": "system", "content": tools_prompt(os.getcwd())}
+class Agent:
+    def __init__(self, client: OpenAI) -> None:
+        self.current_prompt: str = ""
+        self.plan: str = ""
+        self.goal: str = ""
+        self.context: str = ""
+        self.history: list[dict[str, Any]] = []
+        self.tools: str = ""
 
-    while True:
-        response = client.chat.completions.create(
-            model="gpt-4.1",
-            messages=[system_prompt] + messages
+        try:
+            with open('./tools.yaml') as f:
+                self.tools = f.read()
+        except:
+            print("tools.yaml file not found quitting...")
+            exit(1)
+
+        self.model: ChatModel = "gpt-4.1"
+        self.client: OpenAI = client
+
+    def prompt(self, prompt: str) -> None:
+        self.current_prompt = prompt
+
+    def llm_completion(self, prompt: str) -> str:
+        prompt_: ChatCompletionMessageParam = {
+            "role": "user",
+            "content": prompt
+        }
+        response = self.client.chat.completions.create(model=self.model, messages=[prompt_])
+        response_str = response.choices[0].message.content
+
+        if response_str is not None:
+            return response_str
+        else:
+            return "SOMETHING WENT WRONG: COULD NOT CREATE CHAT COMPLETION"
+
+    def decision_router(self):
+        prompt = decision_router_prompt_template(
+            prompt=self.current_prompt,
+            plan=self.plan,
+            goal=self.goal,
+            context=self.context,
+            history=self.history,
+            tools=self.tools
         )
 
-        content = response.choices[0].message.content
-        if not content:
-            console.print("[bold red]No response from GPT.[/bold red]")
-            break
+        decision = self.llm_completion(prompt)
+        print(decision)
+        tool_str = decision[decision.find("<toolcall>") + len("<toolcall>"): decision.find("</toolcall>")]
+        self.tool_router(tool_str)
 
-        console.rule("[bold blue]Assistant Response[/bold blue]")
-        console.print(Markdown(content))
-        extract_thinking(content)
+    def tool_router(self, tool_str: str) -> str | None:
+        toolcall: dict[str, Any] = {}
+        try:
+            toolcall = json.loads(tool_str)
+        except:
+            return "[ERROR] error parsing toolcall"
 
-        if handle_read_file(content, messages):
-            continue
-        if handle_edit_file(content, messages):
-            continue
-        if handle_terminal_command(content, messages):
-            continue
+        self.history.append(toolcall)
 
-        console.print("[bold yellow]No tool commands found. Loop stopping.[/bold yellow]")
-        break
+        tool = toolcall["tool"]
+        toolcall_result: str = ''
+        if tool == "terminal":
+            command: str = toolcall["params"]["command"]
+            timeout: int = toolcall["params"]["timeout"]
+            toolcall_result = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT, text=True, timeout=timeout)
+            self.insert_context(new_context=toolcall_result)
 
-    return messages
+        if tool == "plan":
+            title = toolcall["params"]["title"]
+            steps = toolcall["params"]["steps"]
+            self.plan = f"{title}\n\n{steps}"
+
+        self.decision_router()
+
+    def insert_context(self, new_context: str):
+        new_context = self.llm_completion(insert_context_prompt(
+            old_context=self.context,
+            new_context=new_context,
+            toolcall=json.dumps(self.history[-1])
+        ))
+
+        self.context = new_context
+        print(f"=== New Context ===\n{new_context}")
+
+        self.decision_router()
+
 
 if __name__ == "__main__":
+    agent = Agent(client)
     task = Prompt.ask("prompt")
-    messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": task}]
+    agent.prompt(task)
+    agent.decision_router()
 
-    while True:
-        messages = loop(messages)
-        user_msg = Prompt.ask("prompt")
-        messages.append({"role": "user", "content": user_msg})
