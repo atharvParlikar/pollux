@@ -187,9 +187,9 @@ brief analysis of current state and next action needed
 Only respond to the user (without <terminal>, <read_file>, or <edit_file> tags) when you can confirm all requirements are met and the task is fully complete.
 '''.strip()
 
-
-def decision_router_prompt_template(prompt: str, plan: str, goal: str, context: str, history: list[dict[str, Any]], tools: str) -> str:
+def decision_router_prompt_template(prompt: str, plan: str, goal: str, context: str, history: list[dict[str, Any]], toolcall_history: list[str], tools: str) -> str:
     history_str = '\n'.join(map(lambda x: json.dumps(x), history))
+    toolcall_history_str = '\n============\n'.join(toolcall_history)
     return f'''
 You are a Decision Router - an autonomous coding agent responsible for planning, executing, and adapting to achieve coding goals. You operate in a continuous loop of assessment, planning, execution, and reflection.
 
@@ -208,6 +208,9 @@ You are a Decision Router - an autonomous coding agent responsible for planning,
 
 **History:**
 {history_str}
+
+**toolcall outputs**
+{toolcall_history_str}
 
 ## Available Tools
 {tools}
@@ -249,7 +252,10 @@ Use `<thinking>` tags to analyze the situation:
 - How it aligns with the overall plan
 
 ### 2. Tool Usage Section
-Use exactly ONE tool per response in this JSON format:
+Use exactly ONE tool per response. Format depends on tool type:
+
+**For Native Tools (create_plan, run_terminal, goal_reached, ask_human):**
+Use JSON format in `<toolcall>` tags:
 
 <toolcall>
 {{
@@ -261,20 +267,25 @@ Use exactly ONE tool per response in this JSON format:
 }}
 </toolcall>
 
+**For Non-Native Tools (all other tools):**
+Use command format in `<command>` tags:
+
+<command>
+tool_name arg1 "arg2 with spaces" arg3
+</command>
+
 ### Tool Usage Rules
 - **ONLY use ONE tool per response**
-- **ALWAYS use the exact JSON format shown above**
-- **Parameter values must be properly JSON-encoded strings**
-- **Multi-line strings should use proper JSON escaping (\\n for newlines)**
-- **Tool names must match exactly from the available tools list**
+- **For native tools**: Use exact JSON format with proper escaping
+- **For non-native tools**: Use command-line format with proper quoting
+- **Parameter values with spaces must be quoted**
+- **Multi-line content should be properly quoted or escaped**
 
-## Example Response Format
+## Example Response Formats
+
+### Native Tool Example:
 <thinking>
-Looking at the current state, I can see that [analysis]. The goal is to [goal description], but I notice that [current situation]. 
-
-Based on the history, I can see that [previous actions summary]. The current plan [plan assessment - valid/needs update/missing].
-
-My next action should be [action] because [reasoning]. This will help me [expected outcome] and move us closer to [goal].
+I need to create a plan for implementing the authentication system. Based on the current state, I can see that no plan exists yet, so this is the logical first step.
 </thinking>
 
 <toolcall>
@@ -287,18 +298,47 @@ My next action should be [action] because [reasoning]. This will help me [expect
 }}
 </toolcall>
 
+### Non-Native Tool Example:
+<thinking>
+I need to create a new configuration file for the project. The edit_file tool can create a new file with initial content, which is exactly what I need here.
+</thinking>
+
+<command>
+edit_file create "config/settings.py" "DEBUG = True\nALLOWED_HOSTS = ['localhost', '127.0.0.1']\nDATABASE_NAME = 'myapp.db'"
+</command>
+
+### Non-Native Tool with Multiple Arguments:
+<thinking>
+I need to replace the database connection string in the config file. The edit_file tool's replace operation is perfect for this.
+</thinking>
+
+<command>
+edit_file replace "config/database.py" "DATABASE_URL = 'sqlite:///old.db'" "DATABASE_URL = 'postgresql://user:pass@localhost/newdb'"
+</command>
+
 ## Important Guidelines
 - **Think Before Acting**: Always use `<thinking>` tags to analyze the situation
 - **One Tool Only**: Never use multiple tools in a single response
-- **Structured Output**: Use `<toolcall>` tags to wrap your JSON tool call
+- **Correct Format**: Use `<toolcall>` for native tools, `<command>` for non-native tools
+- **Proper Quoting**: Quote arguments with spaces in command format
 - **Goal-Oriented**: Every action should move toward the stated goal
 - **Adaptive**: Be ready to change course based on results
 - **Document Decisions**: Use thinking section to explain your reasoning
 
 ## Critical Format Requirements
-- Response must contain EXACTLY: `<thinking>...</thinking>` followed by `<toolcall>...</toolcall>`
-- JSON must be valid and parseable within the toolcall tags
+- Response must contain EXACTLY: `<thinking>...</thinking>` followed by either `<toolcall>...</toolcall>` OR `<command>...</command>`
+- For native tools: JSON must be valid and parseable within the toolcall tags
+- For non-native tools: Command must be properly formatted with appropriate quoting
 - NO other text allowed outside these structured elements
+
+## Native Tools List
+The following tools use JSON format in `<toolcall>` tags:
+- create_plan
+- run_terminal  
+- goal_reached
+- ask_human
+
+All other tools use command format in `<command>` tags.
 
 ## Tool Output Expectations
 After using a tool, you should expect:
@@ -307,13 +347,14 @@ After using a tool, you should expect:
 - Potential plan adjustments based on new information
 - Continued iteration until goal is achieved
 
-Remember: You are actively problem-solving and pathfinding toward the goal. Each response should contain meaningful analysis in your thinking section followed by exactly one strategic action via a properly formatted JSON tool call.
+Remember: You are actively problem-solving and pathfinding toward the goal. Each response should contain meaningful analysis in your thinking section followed by exactly one strategic action via the appropriately formatted tool call or command.
 '''.strip()
 
-def insert_context_prompt(old_context: str, new_context: str, toolcall: str):
+
+def insert_context_prompt(old_context: str, new_context: str, toolcall: str, plan: str):
     return f'''
 Your job is to incorporate new found context into old context, and respond with the new incorporated context.
-You will be also given tool call that produced that context for you to have better understanding.
+You will also be given the tool call that produced that context, as well as the current task plan to help you assess what has been done and what still remains.
 
 # Old context
 {old_context}
@@ -324,6 +365,9 @@ You will be also given tool call that produced that context for you to have bett
 # Tool call
 {toolcall}
 
+# Plan
+{plan}
+
 ## Response Format
 You MUST structure your response using these exact blocks:
 
@@ -332,13 +376,36 @@ Analyze the tool call and its result. Consider:
 - What was the purpose of the tool call?
 - What meaningful information does the result provide?
 - How does this relate to the existing context?
+- How does this affect the current task plan? Was any step completed or progressed?
 - What are the broader implications for system state?
 - Should I merge, replace, or append information?
 - Is this information worth preserving in context?
+- Always preserve line numbers if the tool call is read_file or returns file content, as they are required for accurate file editing.
 </thinking>
 
 <context>
 [Put your integrated context here - this will be extracted and used as the new context]
+
+Label each logical unit of context clearly using Markdown-style section headers.
+
+## Example structure:
+
+## File Content: <filename or description>
+<...>
+
+## Error Logs
+<...>
+
+## Tool Effects
+<...>
+
+## Plan Progress
+<...>
+
+## Notes
+<...>
+
+You should only include sections that are relevant based on the toolcall result.
 </context>
 
 ## Important Guidelines
@@ -346,11 +413,11 @@ Analyze the tool call and its result. Consider:
 - **Use <thinking> blocks to reason through your analysis first**
 - **Always analyze if the toolcall result has information worth putting into context**
 - **Simple confirmations like "true" for successful operations don't need to be in context unless they indicate important state changes**
-- **Focus on meaningful information that affects system understanding or task progress**
+- **Reflect on the plan. If the step was completed, it may no longer need to be reflected in context unless useful for future decisions**
 - **Avoid redundancy - don't repeat information already present in old context**
-- **Old context can be completely empty in which case you are building context from scratch**
+- **To ignore - You shall ignore exec field in the yaml tools list, it is not intended for you**
 
 ## Examples of What to Include vs. Omit
-**Include**: File contents, system configuration changes, error messages with diagnostic value, data processing results, state transitions
+**Include**: File contents (with line numbers if read via `read_file`), system configuration changes, error messages with diagnostic value, data processing results, completed or updated plan steps, state transitions  
 **Omit**: Simple boolean confirmations, generic success messages, redundant information
 '''.strip()

@@ -1,5 +1,3 @@
-# pyright: reportUnusedCallResult=false
-
 from rich.console import Console
 from pathlib import Path
 
