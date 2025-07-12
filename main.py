@@ -86,40 +86,16 @@ class Agent:
         logger.info(f"Prompt set: {self.current_prompt[:100]}...")
 
     def llm_completion(self, prompt: str, retries: int = MAX_RETRIES) -> str:
-        """LLM completion with retry logic and error handling"""
-        if not prompt or not prompt.strip():
-            console.print("Prompt cannot be empty")
-
-        prompt_: ChatCompletionMessageParam = {
-            "role": "user",
-            "content": prompt
-        }
-
-        for attempt in range(retries):
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model, 
-                    messages=[prompt_],
-                    timeout=30,  # Add timeout
-                )
-
-                response_str = response.choices[0].message.content
-                if not response_str:
-                    console.print("Empty response from LLM")
-                    return "Empty response from LLM"
-
-                logger.info(f"LLM completion successful on attempt {attempt + 1}")
-                return response_str
-
-            except Exception as e:
-                logger.warning(f"LLM completion attempt {attempt + 1} failed: {e}")
-                if attempt < retries - 1:
-                    time.sleep(RETRY_DELAY * (attempt + 1))  # Exponential backoff
-                else:
-                    console.print(f"Failed to get LLM completion after {retries} attempts: {e}")
-
-        print("Can't get LLM response, quitting...")
-        exit(1)
+        from utils import llm_completion
+        return llm_completion(
+            prompt=prompt,
+            client=self.client,
+            model=self.model,
+            logger=logger,
+            console=console,
+            retries=retries,
+            retry_delay=RETRY_DELAY
+        )
 
     def decision_router(self) -> None:
         """Route decisions with iteration limits and error handling"""

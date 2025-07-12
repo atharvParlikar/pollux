@@ -300,20 +300,10 @@ I need to create a plan for implementing the authentication system. Based on the
 
 ### Non-Native Tool Example:
 <thinking>
-I need to create a new configuration file for the project. The edit_file tool can create a new file with initial content, which is exactly what I need here.
-</thinking>
+I need to create a new read the file to understand the context. The read_file tool can be used to read the file, which is exactly what I need here. </thinking>
 
 <command>
-edit_file create "config/settings.py" "DEBUG = True\nALLOWED_HOSTS = ['localhost', '127.0.0.1']\nDATABASE_NAME = 'myapp.db'"
-</command>
-
-### Non-Native Tool with Multiple Arguments:
-<thinking>
-I need to replace the database connection string in the config file. The edit_file tool's replace operation is perfect for this.
-</thinking>
-
-<command>
-edit_file replace "config/database.py" "DATABASE_URL = 'sqlite:///old.db'" "DATABASE_URL = 'postgresql://user:pass@localhost/newdb'"
+read_file "/User/atharvparlikar/dev/pollux-py/main.py"
 </command>
 
 ## Important Guidelines
