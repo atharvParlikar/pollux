@@ -17,7 +17,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-MODEL: ChatModel = "gpt-4.1"
+MODEL: ChatModel = "gpt-4o"
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0
 COMMAND_TIMEOUT = 30

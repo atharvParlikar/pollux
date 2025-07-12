@@ -1,3 +1,4 @@
+# Native tools
 create_plan:
   desc: Create a new plan of action for achieving the goal
   type: native
@@ -19,6 +20,11 @@ edit_file:
     start_line: (required) Starting line number (1-based, -1 for append)
     end_line: (required) Ending line number (1-based, start_line-1 for insert)
     new_content: (required) New content to insert/replace (empty string to delete)
+
+ask_human:
+  desc: Ask the human user for clarification or input; the question is shown to the user and their answer is added to context
+  params:
+    question: question / clarification you want from human user
 
 goal_reached:
   desc: Exits the agent loop, execute when goal reached.

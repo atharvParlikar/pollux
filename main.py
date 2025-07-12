@@ -3,13 +3,11 @@
 import os
 import subprocess
 import sys
-import time
 import yaml
 from dotenv import load_dotenv
 import json
 from openai import OpenAI
 from typing import Any
-from openai.types.chat import ChatCompletionMessageParam
 from openai.types.shared.chat_model import ChatModel
 from rich.prompt import Prompt
 from pathlib import Path
@@ -91,11 +89,34 @@ class Agent:
             prompt=prompt,
             client=self.client,
             model=self.model,
-            logger=logger,
             console=console,
             retries=retries,
             retry_delay=RETRY_DELAY
         )
+
+    def _show_thinking(self, decision: str) -> None:
+        """Show agent's thinking process in a clean way"""
+        # Extract thinking section if it exists
+        thinking_patterns = [
+            ("thinking>", "thinking"),
+            ("analysis>", "analysis"),
+            ("plan>", "plan"),
+            ("reasoning>", "reasoning")
+        ]
+        
+        for pattern, tag in thinking_patterns:
+            if f"<{pattern}" in decision and f"</{tag}>" in decision:
+                thinking = extract_tag(tag=tag, text=decision)
+                if thinking:
+                    # Show first line or two of thinking
+                    lines = thinking.strip().split('\n')
+                    preview = lines[0]
+                    if len(lines) > 1 and len(preview) < 60:
+                        preview += f" {lines[1]}"
+                    if len(preview) > 80:
+                        preview = preview[:77] + "..."
+                    console.print(f"[dim]💭 {preview}[/dim]")
+                    break
 
     def decision_router(self) -> None:
         """Route decisions with iteration limits and error handling"""
@@ -106,8 +127,7 @@ class Agent:
             logger.error("Maximum iteration limit reached")
             return
 
-        # Simplified thinking indicator
-        console.print(f"[dim]🤔 Thinking... (step {self.iteration_count})[/dim]")
+        console.print(f"[dim]🤔 Step {self.iteration_count}[/dim]")
 
         try:
             prompt = decision_router_prompt_template(
@@ -121,28 +141,40 @@ class Agent:
             )
 
             decision = self.llm_completion(prompt)
+            
+            # Show what the agent is thinking
+            self._show_thinking(decision)
 
-            # Only show decision if it contains important info
-            if "toolcall>" in decision or "command>" in decision:
-                # Extract just the action part for cleaner display
-                if "<toolcall>" in decision:
-                    tool_part = extract_tag(tag="toolcall", text=decision)
-                    if tool_part:
-                        try:
-                            tool_json = json.loads(tool_part)
-                            tool_name = tool_json.get("tool", "unknown")
-                            console.print(f"[cyan]→ Using tool: {tool_name}[/cyan]")
-                        except:
-                            console.print("[cyan]→ Executing tool[/cyan]")
+            # Show action being taken
+            if "<toolcall>" in decision:
+                tool_part = extract_tag(tag="toolcall", text=decision)
+                if tool_part:
+                    try:
+                        tool_json = json.loads(tool_part)
+                        tool_name = tool_json.get("tool", "unknown")
+                        
+                        # Show tool with relevant params
+                        if tool_name == "edit_file":
+                            file_path = tool_json.get("params", {}).get("file_path", "")
+                            console.print(f"[cyan]🔧 Editing {file_path}[/cyan]")
+                        elif tool_name == "run_terminal":
+                            cmd = tool_json.get("params", {}).get("command", "")
+                            console.print(f"[cyan]⚡ Running: {cmd}[/cyan]")
+                        elif tool_name == "ask_human":
+                            question = tool_json.get("params", {}).get("question", "")
+                            console.print(f"[cyan]❓ Question: {question}[/cyan]")
+                        else:
+                            console.print(f"[cyan]🔧 Using {tool_name}[/cyan]")
+                    except:
+                        console.print("[cyan]🔧 Executing tool[/cyan]")
 
-                if "<command>" in decision:
-                    cmd_part = extract_tag(tag="command", text=decision)
-                    if cmd_part:
-                        cmd_name = cmd_part.split()[0] if cmd_part.split() else "unknown"
-                        console.print(f"[cyan]→ Running command: {cmd_name}[/cyan]")
+            if "<command>" in decision:
+                cmd_part = extract_tag(tag="command", text=decision)
+                if cmd_part:
+                    console.print(f"[cyan]⚡ Command: {cmd_part}[/cyan]")
 
             if not (("<toolcall>" in decision and "</toolcall>" in decision) or ("<command>" in decision and "</command>" in decision)):
-                console.log("[yellow]Task complete or waiting for input[/]")
+                console.log("[green]✅ Task complete or waiting for input[/]")
                 logger.info("No toolcall found in decision")
                 return
 
@@ -198,9 +230,17 @@ class Agent:
             self.history.append(toolcall)
             self.tool_outputs.append(result)
 
-            # Show terminal output more cleanly
+            # Show terminal output
             if result.strip():
-                console.print(f"[dim]Output:[/dim] {result.strip()}")
+                lines = result.strip().split('\n')
+                if len(lines) <= 10:
+                    # Show all lines if reasonable
+                    console.print(f"[dim]→ {result.strip()}[/dim]")
+                else:
+                    # Show first 8 lines for really long output
+                    preview = '\n'.join(lines[:8])
+                    console.print(f"[dim]→ {preview}[/dim]")
+                    console.print(f"[dim]  ... ({len(lines)-8} more lines)[/dim]")
 
             self.decision_router()
 
@@ -222,13 +262,34 @@ class Agent:
             try:
                 result: str = edit_file(file_path=file_path, start_line=start_line, end_line=end_line, new_content=new_content)
                 diff = get_unified_diff(old_content=current_file_content, new_content=result, filename=file_path.split("/")[-1])
+                
+                # Show edit details
+                diff_lines = diff.split('\n')
+                added_lines = len([line for line in diff_lines if line.startswith('+')])
+                removed_lines = len([line for line in diff_lines if line.startswith('-')])
+                console.print(f"[dim]→ +{added_lines} -{removed_lines} lines[/dim]")
+                
+                # Show the diff if it's not too long
+                if len(diff_lines) <= 20:
+                    console.print(f"[dim]{diff}[/dim]")
+                elif len(diff_lines) <= 50:
+                    # Show first part of diff
+                    preview = '\n'.join(diff_lines[:15])
+                    console.print(f"[dim]{preview}[/dim]")
+                    console.print(f"[dim]... ({len(diff_lines)-15} more lines)[/dim]")
+                else:
+                    console.print(f"[dim]→ Large diff ({len(diff_lines)} lines)[/dim]")
+                
                 self.insert_context(diff)
             except Exception as e:
                 error_message = str(e)
+                console.print(f"[red]❌ Edit failed: {error_message}[/red]")
                 self.insert_context(f"[ERROR] {error_message}")
 
         elif tool == "ask_human":
-            user_input = Prompt.ask("[bold magenta]🤖 Agent requests input:[/bold magenta]")
+            question = toolcall.get("params", {}).get("question", "")
+            user_input = Prompt.ask(f"[bold magenta]🤖 {question}[/bold magenta]")
+            console.print(f"[dim]→ User said: {user_input}[/dim]")
             self.insert_context(f"User input: {user_input}")
 
         elif tool == "create_plan":
@@ -256,8 +317,6 @@ class Agent:
             "command": command
         })
 
-        console.print(f"[dim]Running: {toolname}[/dim]")
-
         result: str = ''
 
         if tool_runner == "python3":
@@ -276,16 +335,23 @@ class Agent:
                 text=True
             )
 
-        # Show output more cleanly
+        # Show output
         if result.strip():
-            # Truncate very long outputs
-            display_result = result.strip()
-            if len(display_result) > 200:
-                display_result = display_result[:200] + "..."
-            console.print(f"[dim]Output:[/dim] {display_result}")
+            lines = result.strip().split('\n')
+            if len(lines) <= 15:
+                # Show full output if reasonable
+                console.print(f"[dim]→ {result.strip()}[/dim]")
+            else:
+                # Show first 10 lines for really long output
+                preview = '\n'.join(lines[:10])
+                console.print(f"[dim]→ {preview}[/dim]")
+                console.print(f"[dim]  ... ({len(lines)-10} more lines)[/dim]")
 
         if toolname == "read_file":
-            self.context += f"\n\n=== File Content: {command.split(' ')[1]} ===\n{result}"
+            file_path = command.split(' ')[1] if len(command.split(' ')) > 1 else "unknown"
+            lines_count = len(result.split('\n'))
+            console.print(f"[dim]→ Read {lines_count} lines from {file_path}[/dim]")
+            self.context += f"\n\n=== File Content: {file_path} ===\n{result}"
             self.decision_router()
 
         self.insert_context(result)
@@ -299,7 +365,15 @@ class Agent:
         self.plan = f"{title}\n\n{steps}"
         logger.info(f"Plan created: {title}")
 
+        # Show plan with full steps unless really long
+        steps_lines = steps.split('\n')
         console.print(f"[cyan]📋 Plan: {title}[/cyan]")
+        if len(steps_lines) <= 10:
+            console.print(f"[dim]→ {steps}[/dim]")
+        else:
+            preview = '\n'.join(steps_lines[:8])
+            console.print(f"[dim]→ {preview}[/dim]")
+            console.print(f"[dim]  ... ({len(steps_lines)-8} more lines)[/dim]")
         self.decision_router()
 
     def insert_context(self, new_context: str) -> None:
@@ -307,9 +381,6 @@ class Agent:
         if not new_context:
             logger.warning("Empty context provided")
             return
-
-        # Simplified context update indicator
-        console.print("[dim]📥 Updating context...[/dim]")
 
         try:
             if not self.history:
@@ -331,6 +402,7 @@ class Agent:
                     logger.info("Context truncated to prevent memory issues")
 
                 self.context = extracted_context
+                console.print("[dim]📝 Context updated[/dim]")
                 logger.info("Context updated successfully")
             else:
                 logger.warning("Failed to extract context from LLM response")
