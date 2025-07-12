@@ -8,6 +8,7 @@ console = Console()
 def edit_file(file_path: str, start_line: int, end_line: int, new_content: str) -> str:
     """
     Edit a file by replacing lines from start_line to end_line (inclusive, 1-based) with new_content.
+    Returns the operation result followed by the complete file contents.
 
     Special cases:
     - To insert at line N: start_line = N, end_line = N-1 (replace 0 lines)
@@ -24,7 +25,7 @@ def edit_file(file_path: str, start_line: int, end_line: int, new_content: str) 
                 # Creating new file with content
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(new_content, encoding='utf-8')
-                return f"File created: {file_path}"
+                return f"File created: {file_path}\n\n--- FILE CONTENTS ---\n{new_content}"
             else:
                 return f"[ERROR] File not found: {file_path}"
         
@@ -37,7 +38,7 @@ def edit_file(file_path: str, start_line: int, end_line: int, new_content: str) 
             lines.append(new_content)
             new_file_content = '\n'.join(lines)
             path.write_text(new_file_content, encoding='utf-8')
-            return f"Content appended to {file_path}"
+            return f"Content appended to {file_path}\n\n--- FILE CONTENTS ---\n{new_file_content}"
         
         # Validate line numbers
         if start_line < 1 or (end_line > 0 and end_line < start_line and not (start_line == end_line + 1)):
@@ -75,7 +76,7 @@ def edit_file(file_path: str, start_line: int, end_line: int, new_content: str) 
         new_file_content = '\n'.join(lines)
         path.write_text(new_file_content, encoding='utf-8')
         
-        return f"{operation} in {file_path}"
+        return f"{operation} in {file_path}\n\n--- FILE CONTENTS ---\n{new_file_content}"
         
     except Exception as e:
         return f"[ERROR] Failed to edit file: {str(e)}"

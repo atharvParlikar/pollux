@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 import time
-import re
 import yaml
 from dotenv import load_dotenv
 import json
@@ -12,51 +11,17 @@ from openai import OpenAI
 from typing import Any
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.shared.chat_model import ChatModel
-from rich.console import Console
 from rich.prompt import Prompt
 from rich.panel import Panel
-from rich.syntax import Syntax
-import logging
 from pathlib import Path
 
+from globals import MAX_CONTEXT_LENGTH, MAX_HISTORY_LENGTH, MAX_RETRIES, MODEL, PROJECT_DIR, RETRY_DELAY, console, logger
+from native_tools import handle_terminal_tool
 from prompts import decision_router_prompt_template, insert_context_prompt
 from utils import extract_tag
 
-PROJECT_DIR = "/Users/atharvparlikar/dev/pollux-py"
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('agent.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
 # Load environment
 load_dotenv()
-console = Console()
-
-MODEL: ChatModel = "gpt-4.1"
-MAX_RETRIES = 3
-RETRY_DELAY = 1.0
-COMMAND_TIMEOUT = 30
-MAX_CONTEXT_LENGTH = 10000
-MAX_HISTORY_LENGTH = 50
-
-class AgentError(Exception):
-    """Base exception for agent errors"""
-    pass
-
-class ToolCallError(AgentError):
-    """Error in tool execution"""
-    pass
-
-class LLMError(AgentError):
-    """Error in LLM completion"""
-    pass
 
 class Agent:
     def __init__(self, client: OpenAI) -> None:
@@ -125,7 +90,7 @@ class Agent:
     def llm_completion(self, prompt: str, retries: int = MAX_RETRIES) -> str:
         """LLM completion with retry logic and error handling"""
         if not prompt or not prompt.strip():
-            raise LLMError("Prompt cannot be empty")
+            console.print("Prompt cannot be empty")
 
         prompt_: ChatCompletionMessageParam = {
             "role": "user",
@@ -138,12 +103,12 @@ class Agent:
                     model=self.model, 
                     messages=[prompt_],
                     timeout=30,  # Add timeout
-                    max_tokens=2000  # Limit response length
                 )
 
                 response_str = response.choices[0].message.content
                 if not response_str:
-                    raise LLMError("Empty response from LLM")
+                    console.print("Empty response from LLM")
+                    return "Empty response from LLM"
 
                 logger.info(f"LLM completion successful on attempt {attempt + 1}")
                 return response_str
@@ -153,7 +118,7 @@ class Agent:
                 if attempt < retries - 1:
                     time.sleep(RETRY_DELAY * (attempt + 1))  # Exponential backoff
                 else:
-                    raise LLMError(f"Failed to get LLM completion after {retries} attempts: {e}")
+                    console.print(f"Failed to get LLM completion after {retries} attempts: {e}")
 
         print("Can't get LLM response, quitting...")
         exit(1)
@@ -243,9 +208,14 @@ class Agent:
 
         try:
             if tool == "run_terminal":
-                self._handle_terminal_tool(toolcall)
+                result = handle_terminal_tool(toolcall)
+                self.history.append(toolcall)
+                self.tool_outputs.append(result)
+                self.decision_router()
+
             elif tool == "create_plan":
                 self._handle_plan_tool(toolcall)
+
             elif tool == "goal_reached":
                 console.print("[bold green]✅ Goal reached successfully![/]")
                 logger.info("Goal reached")
@@ -298,70 +268,10 @@ class Agent:
 
         self.tool_outputs.append(result)
 
+        if toolname == "read_file":
+            self.decision_router()
+
         self.insert_context(result)
-
-    def _handle_terminal_tool(self, toolcall: dict[str, Any]) -> None:
-        """Handle terminal tool execution with safety checks"""
-        params = toolcall.get("params", {})
-        command = params.get("command")
-
-        if not command:
-            raise ToolCallError("No command specified for terminal tool")
-
-        dangerous_patterns = [
-            r'\brm\s+-rf\s+/',  # matches `rm -rf /`
-            r'\bsudo\s+rm\b',
-            r'\bformat\b.*[a-z]:',  # matches things like `format c:`
-            r'\bdel\b\s+\*',
-            r'\bshutdown\b',
-            r'\breboot\b',
-        ]
-
-        def is_dangerous(command: str) -> bool:
-            cmd_lower = command.lower()
-            return any(re.search(pattern, cmd_lower) for pattern in dangerous_patterns)
-
-        if is_dangerous(command):
-            raise ToolCallError(f"Dangerous command blocked: {command}")
-
-        logger.info(f"Executing terminal command: {command}")
-
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=COMMAND_TIMEOUT,
-                check=False  # Don't raise on non-zero exit
-            )
-
-            # Combine stdout and stderr
-            output = result.stdout
-            if result.stderr:
-                output += f"\n[STDERR]\n{result.stderr}"
-
-            if result.returncode != 0:
-                output += f"\n[EXIT CODE: {result.returncode}]"
-
-            toolcall_result = output or "[No output]"
-
-            self.tool_outputs.append(toolcall_result)
-
-        except subprocess.TimeoutExpired:
-            toolcall_result = f"[Timeout] Command '{command}' took longer than {COMMAND_TIMEOUT} seconds"
-            logger.warning(f"Command timeout: {command}")
-        except Exception as e:
-            toolcall_result = f"[Command Error] {str(e)}"
-            logger.error(f"Command execution error: {e}")
-
-        console.print(Panel.fit(
-            Syntax(toolcall_result, "bash"),
-            title="💻 Terminal Output",
-            border_style="magenta"
-        ))
-
-        self.insert_context(new_context=toolcall_result)
 
     def _handle_plan_tool(self, toolcall: dict[str, Any]) -> None:
         """Handle plan creation tool"""
@@ -394,6 +304,8 @@ class Agent:
                 toolcall=json.dumps(self.history[-1]),
                 plan=self.plan
             ))
+
+            print(updated_context)
 
             extracted_context = extract_tag(tag="context", text=updated_context)
             if extracted_context:
