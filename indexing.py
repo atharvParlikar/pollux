@@ -1,7 +1,6 @@
 import os
 
 from rich.console import Console
-from main import client
 from prompts import index_prompt
 from tools import read_file
 

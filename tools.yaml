@@ -11,6 +11,15 @@ run_terminal:
   params:
     command: (required) The terminal command to execute
 
+edit_file:
+  desc: Edit files by replacing, inserting, or deleting lines using a single primitive operation
+  exec: python3
+  params:
+    file_path: (required) Path to the file to edit
+    start_line: (required) Starting line number (1-based, -1 for append)
+    end_line: (required) Ending line number (1-based, start_line-1 for insert)
+    new_content: (required) New content to insert/replace (empty string to delete)
+
 goal_reached:
   desc: Exits the agent loop, execute when goal reached.
   type: native
@@ -23,23 +32,3 @@ read_file:
   params:
     file_path: (required) Path to the file to read
 
-edit_file:
-  desc: Edit files by replacing, inserting, or deleting lines using a single primitive operation
-  exec: python3
-  params:
-    file_path: (required) Path to the file to edit
-    start_line: (required) Starting line number (1-based, -1 for append)
-    end_line: (required) Ending line number (1-based, start_line-1 for insert)
-    new_content: (required) New content to insert/replace (empty string to delete)
-
-  examples:
-    - desc: Create new file
-      cmd: edit_file "newfile.txt" 1 0 "Hello World"
-    - desc: Insert at line 5
-      cmd: edit_file "file.txt" 5 4 "New line content"
-    - desc: Replace lines 2-4
-      cmd: edit_file "file.txt" 2 4 "Replacement text"
-    - desc: Delete lines 3-5
-      cmd: edit_file "file.txt" 3 5 ""
-    - desc: Append to end
-      cmd: edit_file "file.txt" -1 -1 "End content"

@@ -1,3 +1,4 @@
+from pathlib import Path
 import re
 import subprocess
 from typing import Any
@@ -71,3 +72,53 @@ def handle_terminal_tool(toolcall: dict[str, Any]) -> str:
     ))
 
     return toolcall_result
+
+def edit_file(file_path: str, start_line: int, end_line: int, new_content: str) -> str:
+    path = Path(file_path)
+
+    # Handle file creation if it doesn't exist
+    if not path.exists():
+        if start_line == 1 and end_line == 0:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(new_content, encoding='utf-8')
+            return new_content
+        else:
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+    content = path.read_text(encoding='utf-8')
+    lines = content.split('\n')
+
+    # Handle append to end
+    if start_line == -1 and end_line == -1:
+        lines.append(new_content)
+        new_file_content = '\n'.join(lines)
+        path.write_text(new_file_content, encoding='utf-8')
+        return new_file_content
+
+    # Validate line numbers
+    if start_line < 1 or (end_line > 0 and end_line < start_line and not (start_line == end_line + 1)):
+        raise ValueError(f"Invalid line numbers: start={start_line}, end={end_line}")
+
+    if start_line == end_line + 1:
+        # Insert at position start_line
+        insert_pos = start_line - 1
+        if insert_pos > len(lines):
+            raise IndexError(f"Cannot insert at line {start_line}, file has only {len(lines)} lines")
+        lines.insert(insert_pos, new_content)
+    else:
+        if end_line == 0:
+            end_line = start_line
+        if start_line > len(lines) or end_line > len(lines):
+            raise IndexError(f"Line numbers out of range. File has {len(lines)} lines")
+
+        start_idx = start_line - 1
+        end_idx = end_line
+
+        if new_content:
+            lines[start_idx:end_idx] = [new_content]
+        else:
+            del lines[start_idx:end_idx]
+
+    new_file_content = '\n'.join(lines)
+    path.write_text(new_file_content, encoding='utf-8')
+    return new_file_content

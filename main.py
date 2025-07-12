@@ -12,13 +12,12 @@ from typing import Any
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.shared.chat_model import ChatModel
 from rich.prompt import Prompt
-from rich.panel import Panel
 from pathlib import Path
 
 from globals import MAX_CONTEXT_LENGTH, MAX_HISTORY_LENGTH, MAX_RETRIES, MODEL, PROJECT_DIR, RETRY_DELAY, console, logger
-from native_tools import handle_terminal_tool
+from native_tools import edit_file, handle_terminal_tool
 from prompts import decision_router_prompt_template, insert_context_prompt
-from utils import extract_tag
+from utils import extract_tag, get_unified_diff
 
 # Load environment
 load_dotenv()
@@ -39,7 +38,6 @@ class Agent:
 
         self._load_tools()
         self._validate_environment()
-
 
     def _load_tools(self) -> None:
         """Load tools configuration with proper error handling"""
@@ -132,7 +130,8 @@ class Agent:
             logger.error("Maximum iteration limit reached")
             return
 
-        console.rule(f"[bold yellow]🤔 Agent is Thinking (Iteration {self.iteration_count})[/bold yellow]")
+        # Simplified thinking indicator
+        console.print(f"[dim]🤔 Thinking... (step {self.iteration_count})[/dim]")
 
         try:
             prompt = decision_router_prompt_template(
@@ -146,10 +145,28 @@ class Agent:
             )
 
             decision = self.llm_completion(prompt)
-            console.print(Panel.fit(decision, title="🧠 LLM Decision", border_style="blue"))
+
+            # Only show decision if it contains important info
+            if "toolcall>" in decision or "command>" in decision:
+                # Extract just the action part for cleaner display
+                if "<toolcall>" in decision:
+                    tool_part = extract_tag(tag="toolcall", text=decision)
+                    if tool_part:
+                        try:
+                            tool_json = json.loads(tool_part)
+                            tool_name = tool_json.get("tool", "unknown")
+                            console.print(f"[cyan]→ Using tool: {tool_name}[/cyan]")
+                        except:
+                            console.print("[cyan]→ Executing tool[/cyan]")
+
+                if "<command>" in decision:
+                    cmd_part = extract_tag(tag="command", text=decision)
+                    if cmd_part:
+                        cmd_name = cmd_part.split()[0] if cmd_part.split() else "unknown"
+                        console.print(f"[cyan]→ Running command: {cmd_name}[/cyan]")
 
             if not (("<toolcall>" in decision and "</toolcall>" in decision) or ("<command>" in decision and "</command>" in decision)):
-                console.log("[yellow]No toolcall found in decision. Task may be complete or require human intervention.[/]")
+                console.log("[yellow]Task complete or waiting for input[/]")
                 logger.info("No toolcall found in decision")
                 return
 
@@ -160,9 +177,6 @@ class Agent:
                 console.log("[red]Failed to extract toolcall content[/]")
                 logger.error("Failed to extract toolcall content")
                 return
-
-            print('tool_str', tool_str)
-            print('command_str', command_str)
 
             if len(tool_str) > 0:
                 self.tool_router_native(tool_str)
@@ -203,30 +217,54 @@ class Agent:
         self.history.append(toolcall)
         logger.info(f"Executing tool: {tool}")
 
-        console.rule(f"[bold green]🛠️ Tool Called: [cyan]{tool}[/cyan][/bold green]")
-        console.print(Panel.fit(json.dumps(toolcall, indent=2), title="🔧 Toolcall Input", border_style="green"))
+        if tool == "run_terminal":
+            result = handle_terminal_tool(toolcall)
+            self.history.append(toolcall)
+            self.tool_outputs.append(result)
 
-        try:
-            if tool == "run_terminal":
-                result = handle_terminal_tool(toolcall)
-                self.history.append(toolcall)
-                self.tool_outputs.append(result)
-                self.decision_router()
+            # Show terminal output more cleanly
+            if result.strip():
+                console.print(f"[dim]Output:[/dim] {result.strip()}")
 
-            elif tool == "create_plan":
-                self._handle_plan_tool(toolcall)
+            self.decision_router()
 
-            elif tool == "goal_reached":
-                console.print("[bold green]✅ Goal reached successfully![/]")
-                logger.info("Goal reached")
-                return "goal_reached"
-            else:
-                console.print(f"[bold red]❌ Unknown tool: {tool}[/]")
-                logger.error(f"Unknown tool: {tool}")
+        elif tool == "edit_file":
+            params = toolcall["params"]
 
-        except Exception as e:
-            console.print(f"[bold red]❌ Error executing tool {tool}: {e}[/]")
-            logger.error(f"Tool execution error: {e}")
+            file_path: str= params["file_path"]
+            start_line: int = params["start_line"]
+            end_line: int = params["end_line"]
+            new_content: str = params["new_content"]
+
+            self.history.append(toolcall)
+
+            current_file_content = '' 
+
+            with open(file_path) as f:
+                current_file_content = f.read()
+
+            try:
+                result: str = edit_file(file_path=file_path, start_line=start_line, end_line=end_line, new_content=new_content)
+                diff = get_unified_diff(old_content=current_file_content, new_content=result, filename=file_path.split("/")[-1])
+                self.insert_context(diff)
+            except Exception as e:
+                error_message = str(e)
+                self.insert_context(f"[ERROR] {error_message}")
+
+        elif tool == "ask_human":
+            user_input = Prompt.ask("[bold magenta]🤖 Agent requests input:[/bold magenta]")
+            self.insert_context(f"User input: {user_input}")
+
+        elif tool == "create_plan":
+            self._handle_plan_tool(toolcall)
+
+        elif tool == "goal_reached":
+            console.print("[bold green]✅ Goal reached![/]")
+            logger.info("Goal reached")
+            return "goal_reached"
+        else:
+            console.print(f"[bold red]❌ Unknown tool: {tool}[/]")
+            logger.error(f"Unknown tool: {tool}")
 
         return None
 
@@ -242,14 +280,13 @@ class Agent:
             "command": command
         })
 
-        print("tool-runner: ", tool_runner)
-        console.rule(f"[bold green]🛠️ tool use [cyan]{toolname}[/cyan] [/bold green]")
+        console.print(f"[dim]Running: {toolname}[/dim]")
 
         result: str = ''
 
         if tool_runner == "python3":
             result = subprocess.check_output(
-                f"python3 {PROJECT_DIR}/tools/{toolname}.py {command[len(toolname) + len(' '):]}",
+                f"python3 {PROJECT_DIR}/external_tools/{toolname}.py {command[len(toolname) + len(' '):]}",
                 shell=True,
                 stderr=subprocess.STDOUT,
                 text=True
@@ -263,12 +300,16 @@ class Agent:
                 text=True
             )
 
-
-        console.print(Panel.fit(result, title="tool output", border_style="cyan"))
-
-        self.tool_outputs.append(result)
+        # Show output more cleanly
+        if result.strip():
+            # Truncate very long outputs
+            display_result = result.strip()
+            if len(display_result) > 200:
+                display_result = display_result[:200] + "..."
+            console.print(f"[dim]Output:[/dim] {display_result}")
 
         if toolname == "read_file":
+            self.context += f"\n\n=== File Content: {command.split(' ')[1]} ===\n{result}"
             self.decision_router()
 
         self.insert_context(result)
@@ -282,7 +323,7 @@ class Agent:
         self.plan = f"{title}\n\n{steps}"
         logger.info(f"Plan created: {title}")
 
-        console.print(Panel.fit(self.plan, title="🧭 New Plan", border_style="cyan"))
+        console.print(f"[cyan]📋 Plan: {title}[/cyan]")
         self.decision_router()
 
     def insert_context(self, new_context: str) -> None:
@@ -291,7 +332,8 @@ class Agent:
             logger.warning("Empty context provided")
             return
 
-        console.rule("[bold cyan]📥 Updating Context[/bold cyan]")
+        # Simplified context update indicator
+        console.print("[dim]📥 Updating context...[/dim]")
 
         try:
             if not self.history:
@@ -304,8 +346,6 @@ class Agent:
                 toolcall=json.dumps(self.history[-1]),
                 plan=self.plan
             ))
-
-            print(updated_context)
 
             extracted_context = extract_tag(tag="context", text=updated_context)
             if extracted_context:
@@ -325,18 +365,18 @@ class Agent:
             logger.error(f"Context update error: {e}")
             # Continue with old context
 
-        console.print(Panel.fit(self.context, title="🧠 Updated Context", border_style="yellow"))
         self.decision_router()
 
     def run(self, task: str) -> None:
         """Main execution method with comprehensive error handling"""
         try:
             self.prompt(task)
+            console.print(f"[bold green]🚀 Starting task:[/bold green] {task}")
             logger.info(f"Starting agent with task: {task}")
             self.decision_router()
 
         except KeyboardInterrupt:
-            console.print("\n[bold yellow]⚠️ Agent interrupted by user[/]")
+            console.print("\n[bold yellow]⚠️ Interrupted by user[/]")
             logger.info("Agent interrupted by user")
         except Exception as e:
             console.print(f"[bold red]💥 Fatal error: {e}[/]")
@@ -352,7 +392,7 @@ def main():
         client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
         agent = Agent(client)
 
-        task = Prompt.ask("[bold cyan]Enter your prompt[/bold cyan]")
+        task = Prompt.ask("[bold cyan]Enter your task[/bold cyan]")
         if not task.strip():
             console.print("[bold red]Empty task provided. Exiting.[/]")
             return

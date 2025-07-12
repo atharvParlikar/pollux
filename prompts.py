@@ -334,9 +334,9 @@ edit_file replace "config/database.py" "DATABASE_URL = 'sqlite:///old.db'" "DATA
 ## Native Tools List
 The following tools use JSON format in `<toolcall>` tags:
 - create_plan
-- run_terminal  
+- run_terminal
+- edit_file
 - goal_reached
-- ask_human
 
 All other tools use command format in `<command>` tags.
 
