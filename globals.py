@@ -1,7 +1,10 @@
 import logging
 from openai.types.shared.chat_model import ChatModel
 from rich.console import Console
+import os
+from openai import OpenAI
 
+client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
 console = Console()
 
@@ -25,3 +28,4 @@ MAX_CONTEXT_LENGTH = 10000
 MAX_HISTORY_LENGTH = 50
 
 PROJECT_DIR = "/Users/atharvparlikar/dev/pollux-py"
+

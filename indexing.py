@@ -1,8 +1,10 @@
 import os
 
 from rich.console import Console
+from globals import MODEL, client
 from prompts import index_prompt
 from tools import read_file
+from utils import llm_completion
 
 console = Console()
 
@@ -22,14 +24,14 @@ def get_all_files(path: str, blacklist: set[str]) -> list[str]:
 
 def index_single_file(file_path: str, all_files: list[str]) -> str:
     content = read_file(file_path)
-    response = client.responses.create(
-        model="gpt-4o",
-        instructions="You are a coding agent",
-        input=index_prompt(all_files, file_path, content),
+    response = llm_completion(
+        prompt=index_prompt(all_files, file_path, content),
+        client=client,
+        model=MODEL,
+        console=console,
+        retries=3
     )
-    return response.output_text
-
-
+    return response
 def create_index(project_path: str) -> None:
     console.print("create_index() called")
     files = get_all_files(project_path, {

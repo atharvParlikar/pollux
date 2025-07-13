@@ -29,6 +29,8 @@ ask_human:
 goal_reached:
   desc: Exits the agent loop, execute when goal reached.
   type: native
+  params:
+      message: Message to be displayed when the goal is reached (optional, defaults to 'Goal reached!')
 
 # SHELL-EXECUTABLE tools (external)
 read_file:
